@@ -73,7 +73,16 @@ func run() error {
 	slog.Info("providers enabled", "names", providers.Names())
 
 	// 6. Start the HTTP server.
-	handler := &api.Handler{DB: db, Redis: rdb, Providers: providers}
+	if cfg.AdminToken == "" {
+		slog.Warn("ADMIN_TOKEN is not set, the /admin endpoints are disabled")
+	}
+	handler := &api.Handler{
+		DB:         db,
+		Redis:      rdb,
+		Providers:  providers,
+		Tenants:    store.NewTenants(db),
+		AdminToken: cfg.AdminToken,
+	}
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           api.NewRouter(handler, cfg.MaxBodyBytes),

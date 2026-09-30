@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -14,9 +15,11 @@ import (
 
 // Handler holds the things our handlers need (dependencies).
 type Handler struct {
-	DB        *pgxpool.Pool
-	Redis     *redis.Client
-	Providers provider.Registry
+	DB         *pgxpool.Pool
+	Redis      *redis.Client
+	Providers  provider.Registry
+	Tenants    TenantStore
+	AdminToken string
 }
 
 // writeJSON is a small helper to send JSON responses.
@@ -32,6 +35,21 @@ func writeError(w http.ResponseWriter, status int, errType, message string) {
 	writeJSON(w, status, map[string]any{
 		"error": map[string]string{"message": message, "type": errType},
 	})
+}
+
+// decodeJSON reads the request body into v.
+// On a problem it sends the error response itself and returns false.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body is too large")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid_request_error", "body is not valid JSON")
+		return false
+	}
+	return true
 }
 
 // Healthz says "the process is alive". It checks nothing else,

@@ -18,10 +18,19 @@ func NewRouter(h *Handler, maxBodyBytes int64) http.Handler {
 	r.Use(Recoverer)
 	r.Use(BodyLimit(maxBodyBytes))
 
+	// Open to everyone.
 	r.Get("/healthz", h.Healthz)
 	r.Get("/readyz", h.Readyz)
 
-	r.Post("/v1/chat/completions", h.ChatCompletions)
+	// Client API: needs a tenant API key.
+	r.With(h.Auth).Post("/v1/chat/completions", h.ChatCompletions)
+
+	// Admin API: needs the ADMIN_TOKEN.
+	r.Route("/admin", func(r chi.Router) {
+		r.Use(h.AdminAuth)
+		r.Post("/tenants", h.CreateTenant)
+		r.Post("/tenants/{id}/keys", h.AddTenantKey)
+	})
 
 	return r
 }

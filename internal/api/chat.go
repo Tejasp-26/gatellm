@@ -1,8 +1,6 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -31,6 +29,7 @@ func validate(req *provider.ChatRequest) string {
 }
 
 // ChatCompletions handles POST /v1/chat/completions (OpenAI format).
+// The Auth middleware runs before it, so the tenant is already known.
 // The client picks the provider inside the model name:
 //
 //	"mock"                          -> mock provider
@@ -39,13 +38,7 @@ func validate(req *provider.ChatRequest) string {
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 1. Read the JSON body.
 	var req provider.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body is too large")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "body is not valid JSON")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -80,6 +73,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		// The full error goes to the log. The client gets a short, safe message.
 		slog.Warn("provider call failed",
 			"request_id", RequestIDFrom(r.Context()),
+			"tenant_id", tenantIDFrom(r.Context()),
 			"provider", p.Name(),
 			"err", err,
 		)

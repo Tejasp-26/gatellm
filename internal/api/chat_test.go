@@ -5,22 +5,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"gatellm/internal/provider"
 )
 
-// newTestRouter builds the real router with only the mock provider.
-// DB and Redis are nil, because the chat endpoint does not use them.
-func newTestRouter() http.Handler {
-	h := &Handler{Providers: provider.Registry{"mock": provider.NewMock(0, 0)}}
-	return NewRouter(h, 1024) // 1 KB body limit, to test the size check
-}
-
+// post sends a chat request with a valid API key.
 func post(body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-	newTestRouter().ServeHTTP(rec, req)
-	return rec
+	srv, _ := newTestServer(testAdminToken)
+	return do(srv, http.MethodPost, "/v1/chat/completions", body, "Bearer "+testAPIKey)
 }
 
 func TestChatSuccess(t *testing.T) {
