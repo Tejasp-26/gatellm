@@ -47,11 +47,6 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", msg)
 		return
 	}
-	if req.Stream {
-		writeError(w, http.StatusNotImplemented, "invalid_request_error", "streaming is not available yet")
-		return
-	}
-
 	// 3. Find the provider from the model name.
 	providerName, modelName, _ := strings.Cut(req.Model, "/")
 	p, ok := h.Providers[providerName]
@@ -66,6 +61,12 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Model = modelName
+
+	// Streaming has its own flow.
+	if req.Stream {
+		h.streamChat(w, r, p, &req)
+		return
+	}
 
 	// 4. Call the provider.
 	resp, err := p.Chat(r.Context(), &req)

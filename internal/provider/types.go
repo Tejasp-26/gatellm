@@ -2,10 +2,7 @@
 // and contains the concrete providers (mock, groq, gemini).
 package provider
 
-import (
-	"errors"
-	"fmt"
-)
+import "fmt"
 
 // The types below follow the OpenAI chat format, so any OpenAI client works with our gateway.
 
@@ -22,6 +19,14 @@ type ChatRequest struct {
 	Temperature *float64  `json:"temperature,omitempty"` // pointer, so 0 and "not set" are different
 	MaxTokens   int       `json:"max_tokens,omitempty"`
 	Stream      bool      `json:"stream,omitempty"`
+
+	// Only used with stream:true. The client can ask for a final usage chunk.
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+}
+
+// StreamOptions is the OpenAI "stream_options" object.
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // Choice is one answer from the model.
@@ -48,10 +53,13 @@ type ChatResponse struct {
 	Usage   Usage    `json:"usage"`
 }
 
-// StreamChunk is one piece of a streaming answer (used from Phase 3).
+// StreamChunk is one piece of a streaming answer.
+// A chunk can carry text, a finish reason, the token usage, or an error.
+// After an Err chunk nothing else follows.
 type StreamChunk struct {
 	Content      string
 	FinishReason string
+	Usage        *Usage // set when the provider reports token counts (usually near the end)
 	Err          error
 }
 
@@ -65,6 +73,3 @@ type ProviderError struct {
 func (e *ProviderError) Error() string {
 	return fmt.Sprintf("provider returned status %d: %s", e.StatusCode, e.Message)
 }
-
-// ErrStreamingNotReady is returned by ChatStream until we build streaming in Phase 3.
-var ErrStreamingNotReady = errors.New("streaming is not implemented yet")

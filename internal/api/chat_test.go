@@ -42,7 +42,6 @@ func TestChatBadRequests(t *testing.T) {
 		{"bad role", `{"model":"mock","messages":[{"role":"robot","content":"hi"}]}`, 400},
 		{"unknown provider", `{"model":"foo/bar","messages":[{"role":"user","content":"hi"}]}`, 400},
 		{"provider not enabled", `{"model":"groq/x","messages":[{"role":"user","content":"hi"}]}`, 400},
-		{"streaming not ready", `{"model":"mock","stream":true,"messages":[{"role":"user","content":"hi"}]}`, 501},
 		{"body too large", `{"model":"mock","messages":[{"role":"user","content":"` + strings.Repeat("a", 2000) + `"}]}`, 413},
 	}
 	for _, tc := range tests {
