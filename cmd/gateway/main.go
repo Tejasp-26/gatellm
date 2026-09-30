@@ -12,6 +12,7 @@ import (
 
 	"gatellm/internal/api"
 	"gatellm/internal/config"
+	"gatellm/internal/provider"
 	"gatellm/internal/store"
 	"gatellm/migrations"
 )
@@ -59,11 +60,23 @@ func run() error {
 		return err
 	}
 
-	// 5. Start the HTTP server.
-	handler := &api.Handler{DB: db, Redis: rdb}
+	// 5. Build the providers. Mock is always on. Groq and Gemini need an API key.
+	providers := provider.Registry{
+		"mock": provider.NewMock(time.Duration(cfg.MockLatency)*time.Millisecond, cfg.MockErrorPct),
+	}
+	if cfg.GroqAPIKey != "" {
+		providers["groq"] = provider.NewGroq(cfg.GroqAPIKey)
+	}
+	if cfg.GeminiAPIKey != "" {
+		providers["gemini"] = provider.NewGemini(cfg.GeminiAPIKey)
+	}
+	slog.Info("providers enabled", "names", providers.Names())
+
+	// 6. Start the HTTP server.
+	handler := &api.Handler{DB: db, Redis: rdb, Providers: providers}
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           api.NewRouter(handler),
+		Handler:           api.NewRouter(handler, cfg.MaxBodyBytes),
 		ReadHeaderTimeout: 5 * time.Second, // protects against slow-header attacks
 	}
 
@@ -73,7 +86,7 @@ func run() error {
 		serverErr <- srv.ListenAndServe()
 	}()
 
-	// 6. Wait for a stop signal or a server error.
+	// 7. Wait for a stop signal or a server error.
 	select {
 	case err := <-serverErr:
 		if !errors.Is(err, http.ErrServerClosed) {

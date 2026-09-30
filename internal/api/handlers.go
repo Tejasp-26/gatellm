@@ -8,12 +8,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+
+	"gatellm/internal/provider"
 )
 
 // Handler holds the things our handlers need (dependencies).
 type Handler struct {
-	DB    *pgxpool.Pool
-	Redis *redis.Client
+	DB        *pgxpool.Pool
+	Redis     *redis.Client
+	Providers provider.Registry
 }
 
 // writeJSON is a small helper to send JSON responses.
@@ -21,6 +24,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// writeError sends errors in the same shape as OpenAI, so OpenAI clients understand them:
+// {"error": {"message": "...", "type": "..."}}
+func writeError(w http.ResponseWriter, status int, errType, message string) {
+	writeJSON(w, status, map[string]any{
+		"error": map[string]string{"message": message, "type": errType},
+	})
 }
 
 // Healthz says "the process is alive". It checks nothing else,
