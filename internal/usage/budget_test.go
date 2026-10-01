@@ -46,6 +46,12 @@ func TestMockHasOnePrice(t *testing.T) {
 	}
 }
 
+func TestSecondMockHasTheMockPrice(t *testing.T) {
+	if PriceFor("mock-b", "") != PriceFor("mock", "") {
+		t.Error("mock-b must have the same fake price as mock")
+	}
+}
+
 func TestBudgetKeyChangesEveryMonth(t *testing.T) {
 	oct := budgetKey("t1", time.Date(2026, 10, 31, 23, 59, 0, 0, time.UTC))
 	nov := budgetKey("t1", time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))

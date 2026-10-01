@@ -222,3 +222,16 @@ func TestThresholdBelowOneIsFixed(t *testing.T) {
 		t.Error("a threshold of 0 should behave like 1")
 	}
 }
+
+// Once the cooldown is over, State() already says half-open (the router uses this to try the provider again).
+func TestStateShowsHalfOpenAfterCooldownEvenWithoutACall(t *testing.T) {
+	b, now := newTestBreaker(1, 10*time.Second)
+	call(b, Failure)
+	if b.State() != Open {
+		t.Fatalf("state %v, want open", b.State())
+	}
+	*now = now.Add(11 * time.Second)
+	if b.State() != HalfOpen {
+		t.Errorf("state %v, want half-open after the cooldown", b.State())
+	}
+}

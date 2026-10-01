@@ -66,6 +66,28 @@ func NewGemini(apiKey string) *OpenAICompatible {
 
 func (p *OpenAICompatible) Name() string { return p.name }
 
+// Ping is the health check: it asks the provider for its list of models (GET /models).
+// Groq and Gemini both offer this in their OpenAI-compatible API (checked in the docs).
+// It generates no text, so it uses no tokens.
+func (p *OpenAICompatible) Ping(ctx context.Context) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/models", nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return errorFromResponse(resp)
+	}
+	io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes)) // read the body so the connection can be reused
+	return nil
+}
+
 // newRequest builds the HTTP request to the provider.
 func (p *OpenAICompatible) newRequest(ctx context.Context, body *ChatRequest) (*http.Request, error) {
 	payload, err := json.Marshal(body)

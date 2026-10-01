@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"gatellm/internal/provider"
+	"gatellm/internal/router"
 )
 
 // Handler holds the things our handlers need (dependencies).
@@ -22,6 +23,13 @@ type Handler struct {
 	AdminToken string
 	Limiter    RateLimiter   // nil = no rate limiting
 	Budget     BudgetTracker // nil = no monthly budget
+	Router     AutoRouter    // nil = the model "auto" is not available
+}
+
+// AutoRouter is what the handlers need from the router (the real one is router.Router).
+type AutoRouter interface {
+	Chat(ctx context.Context, req *provider.ChatRequest) (*provider.ChatResponse, router.Served, error)
+	ChatStream(ctx context.Context, req *provider.ChatRequest) (<-chan provider.StreamChunk, router.Served, error)
 }
 
 // writeJSON is a small helper to send JSON responses.

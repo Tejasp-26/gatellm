@@ -26,6 +26,12 @@ type Provider interface {
 	ChatStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error)
 }
 
+// Pinger is an optional extra. A provider that has it can say "I am alive" without
+// generating any text, so a health check costs no tokens. The router uses it in the background.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
 // Registry holds all enabled providers, found by name.
 type Registry map[string]Provider
 

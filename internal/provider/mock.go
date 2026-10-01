@@ -21,15 +21,33 @@ const (
 // Mock is a fake provider. It costs nothing and lets us test slow or failing providers.
 // We use it for development, load tests and failure tests.
 type Mock struct {
+	name      string        // "mock", or "mock-b" for a second mock (used to test fallback)
 	latency   time.Duration // wait before the answer (or before the first word when streaming)
 	errorRate float64       // 0 = never fails, 1 = always fails, 0.3 = fails 30% of the time
 }
 
 func NewMock(latency time.Duration, errorRate float64) *Mock {
-	return &Mock{latency: latency, errorRate: errorRate}
+	return NewMockNamed("mock", latency, errorRate)
 }
 
-func (m *Mock) Name() string { return "mock" }
+// NewMockNamed makes a mock with its own name. With two mocks we can test fallback:
+// one that always fails and one that works.
+func NewMockNamed(name string, latency time.Duration, errorRate float64) *Mock {
+	return &Mock{name: name, latency: latency, errorRate: errorRate}
+}
+
+func (m *Mock) Name() string { return m.name }
+
+// Ping is the health check. It fails as often as the mock fails.
+func (m *Mock) Ping(ctx context.Context) error {
+	if !sleepCtx(ctx, m.latency) {
+		return ctx.Err()
+	}
+	if rand.Float64() < m.errorRate {
+		return &ProviderError{StatusCode: 503, Message: "mock provider simulated failure"}
+	}
+	return nil
+}
 
 // lastUserMessage returns the text of the last "user" message.
 func lastUserMessage(req *ChatRequest) string {

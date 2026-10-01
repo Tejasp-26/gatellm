@@ -77,9 +77,13 @@ func New(cfg Config) *Breaker {
 }
 
 // State returns the current state.
+// An open breaker whose cooldown is over is reported as half-open: the next call will be the test call.
 func (b *Breaker) State() State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.state == Open && b.now().Sub(b.openedAt) >= b.cfg.Cooldown {
+		return HalfOpen
+	}
 	return b.state
 }
 

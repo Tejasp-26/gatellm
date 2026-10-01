@@ -35,6 +35,13 @@ type Config struct {
 	RetryMaxMS         int // the wait never grows above this
 	BreakerFailures    int // failures in a row that open the circuit breaker
 	BreakerCooldownSec int // how long the breaker stays open
+
+	// Routing (Phase 5b): the model "auto".
+	RouteStrategy      string  // priority, weighted or latency
+	RouteTargets       string  // e.g. "groq/llama-3.1-8b-instant,gemini/gemini-2.5-flash" (empty = all real providers)
+	HealthCheckSeconds int     // how often to ping the providers, 0 = never
+	MockBLatency       int     // the second mock ("mock-b"), used to test fallback
+	MockBErrorPct      float64 // failure rate of mock-b
 }
 
 // Load reads env variables and checks that the required ones exist.
@@ -120,6 +127,30 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s must be bigger than 0", s.name)
 		}
 		*s.dest = int(n)
+	}
+
+	cfg.RouteStrategy = strings.ToLower(getEnv("ROUTE_STRATEGY", "priority"))
+	cfg.RouteTargets = getEnv("ROUTE_TARGETS", "")
+
+	health, err := getInt64("HEALTH_CHECK_INTERVAL_SECONDS", 30)
+	if err != nil {
+		return nil, err
+	}
+	if health < 0 {
+		return nil, fmt.Errorf("HEALTH_CHECK_INTERVAL_SECONDS must be 0 (off) or more")
+	}
+	cfg.HealthCheckSeconds = int(health)
+
+	mockBLatency, err := getInt64("MOCK_B_LATENCY_MS", 200)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MockBLatency = int(mockBLatency)
+	if cfg.MockBErrorPct, err = getFloat("MOCK_B_ERROR_RATE", 0); err != nil {
+		return nil, err
+	}
+	if cfg.MockBErrorPct < 0 || cfg.MockBErrorPct > 1 {
+		return nil, fmt.Errorf("MOCK_B_ERROR_RATE must be between 0 and 1")
 	}
 	return cfg, nil
 }

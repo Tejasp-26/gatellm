@@ -1,6 +1,8 @@
 // Package usage knows what requests cost and how much each tenant spent this month.
 package usage
 
+import "strings"
+
 // Price is in US dollars per 1 million tokens.
 type Price struct {
 	InputPer1M  float64
@@ -35,7 +37,7 @@ var defaultPrice = Price{InputPer1M: 0.50, OutputPer1M: 1.50}
 
 // PriceFor returns the price of a model. The mock has one price for all its models.
 func PriceFor(providerName, model string) Price {
-	if providerName == "mock" {
+	if strings.HasPrefix(providerName, "mock") { // "mock" and "mock-b"
 		return prices["mock/"]
 	}
 	if p, ok := prices[providerName+"/"+model]; ok {

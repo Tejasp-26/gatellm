@@ -154,3 +154,26 @@ func (r *Resilient) startStream(ctx context.Context, req *ChatRequest, done func
 	}()
 	return out, nil
 }
+
+// Ping is a health check that goes through the circuit breaker.
+//   - A failed ping counts like a failed call, so a dead provider is paused even with no traffic.
+//   - After the cooldown the ping is the test call, so a provider that came back is noticed
+//     and the breaker closes without waiting for a real client request.
+//
+// There are no retries here: the next check comes in a few seconds anyway.
+func (r *Resilient) Ping(ctx context.Context) error {
+	pinger, ok := r.inner.(Pinger)
+	if !ok {
+		return nil // this provider has no health check, nothing to do
+	}
+	done, err := r.breaker.Allow()
+	if err != nil {
+		return err
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	err = pinger.Ping(pingCtx)
+	done(outcomeOf(err))
+	return err
+}

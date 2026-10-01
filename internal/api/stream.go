@@ -52,7 +52,7 @@ func writeSSEJSON(w http.ResponseWriter, f http.Flusher, v any) error {
 }
 
 // streamChat answers a chat request with a Server-Sent Events stream.
-func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.Provider, req *provider.ChatRequest, res *reservation) {
+func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend, req *provider.ChatRequest, res *reservation) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "server_error", "streaming is not supported here")
@@ -66,17 +66,19 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	defer cancel()
 
 	start := time.Now()
-	chunks, err := p.ChatStream(ctx, req)
+	chunks, sv, err := be.stream(ctx, req)
+	setRouteHeader(w, be, sv)
 	if err != nil {
 		// We have not sent anything yet, so a normal JSON error is still possible.
 		res.refund()
 		slog.Warn("provider stream failed to start",
 			"request_id", RequestIDFrom(ctx),
 			"tenant_id", tenantIDFrom(ctx),
-			"provider", p.Name(),
+			"provider", sv.Provider,
+			"tried", sv.Tried,
 			"err", err,
 		)
-		writeUpstreamError(w, p, err)
+		writeUpstreamError(w, sv, err)
 		return
 	}
 
@@ -84,16 +86,20 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no") // tells proxies like nginx not to hold the data back
-	w.Header().Set("X-Provider", p.Name())
+	w.Header().Set("X-Provider", sv.Provider)
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
 	var usage *provider.Usage
+	modelName := sv.Model // the model that really answered
+	if modelName == "" {
+		modelName = sv.Provider
+	}
 	id := "chatcmpl-" + RequestIDFrom(ctx)
 	created := time.Now().Unix()
 	newChunk := func(delta sseDelta, finish *string) sseChunk {
 		return sseChunk{
-			ID: id, Object: "chat.completion.chunk", Created: created, Model: req.Model,
+			ID: id, Object: "chat.completion.chunk", Created: created, Model: modelName,
 			Choices: []sseChoice{{Index: 0, Delta: delta, FinishReason: finish}},
 		}
 	}
@@ -109,7 +115,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	answerChars := 0
 	defer func() {
 		res.settle(usage, answerChars)
-		h.recordSpend(r.Context(), p.Name(), req.Model, usage, estimatePromptTokens(req), answerChars)
+		h.recordSpend(r.Context(), sv.Provider, sv.Model, usage, estimatePromptTokens(req), answerChars)
 	}()
 
 	for chunk := range chunks {
@@ -119,13 +125,13 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 			slog.Warn("provider stream failed in the middle",
 				"request_id", RequestIDFrom(ctx),
 				"tenant_id", tenantIDFrom(ctx),
-				"provider", p.Name(),
+				"provider", sv.Provider,
 				"pieces_sent", pieces,
 				"err", chunk.Err,
 			)
 			writeSSEJSON(w, flusher, map[string]any{
 				"error": map[string]string{
-					"message": "the " + p.Name() + " provider failed during the stream",
+					"message": "the " + sv.Provider + " provider failed during the stream",
 					"type":    "upstream_error",
 				},
 			})
@@ -147,7 +153,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 		if err := writeSSEJSON(w, flusher, newChunk(sseDelta{Content: chunk.Content}, finish)); err != nil {
 			// Writing failed: the client is gone. The deferred cancel() stops the provider.
 			slog.Info("client disconnected during stream",
-				"request_id", RequestIDFrom(ctx), "provider", p.Name(), "pieces_sent", pieces)
+				"request_id", RequestIDFrom(ctx), "provider", sv.Provider, "pieces_sent", pieces)
 			return
 		}
 		pieces++
@@ -156,14 +162,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	// The channel closes on its own when the answer is complete, or when ctx was cancelled.
 	if ctx.Err() != nil {
 		slog.Info("client disconnected during stream",
-			"request_id", RequestIDFrom(ctx), "provider", p.Name(), "pieces_sent", pieces)
+			"request_id", RequestIDFrom(ctx), "provider", sv.Provider, "pieces_sent", pieces)
 		return
 	}
 
 	// Only if the client asked for it, send the token usage as a last chunk with no choices.
 	if includeUsage && usage != nil {
 		writeSSEJSON(w, flusher, sseChunk{
-			ID: id, Object: "chat.completion.chunk", Created: created, Model: req.Model,
+			ID: id, Object: "chat.completion.chunk", Created: created, Model: modelName,
 			Choices: []sseChoice{}, Usage: usage,
 		})
 	}
@@ -173,7 +179,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	attrs := []any{
 		"request_id", RequestIDFrom(ctx),
 		"tenant_id", tenantIDFrom(ctx),
-		"provider", p.Name(),
+		"provider", sv.Provider,
 		"pieces", pieces,
 		"duration_ms", time.Since(start).Milliseconds(),
 	}

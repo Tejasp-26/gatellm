@@ -15,6 +15,7 @@ import (
 	"gatellm/internal/config"
 	"gatellm/internal/provider"
 	"gatellm/internal/ratelimit"
+	"gatellm/internal/router"
 	"gatellm/internal/store"
 	"gatellm/internal/usage"
 	"gatellm/migrations"
@@ -85,6 +86,8 @@ func run() error {
 	}
 	providers := provider.Registry{
 		"mock": protect(provider.NewMock(time.Duration(cfg.MockLatency)*time.Millisecond, cfg.MockErrorPct), 0),
+		// A second mock. With two mocks we can test fallback: make one fail, the other answers.
+		"mock-b": protect(provider.NewMockNamed("mock-b", time.Duration(cfg.MockBLatency)*time.Millisecond, cfg.MockBErrorPct), 0),
 	}
 	if cfg.GroqAPIKey != "" {
 		providers["groq"] = protect(provider.NewGroq(cfg.GroqAPIKey), cfg.GroqTimeoutMS)
@@ -93,6 +96,27 @@ func run() error {
 		providers["gemini"] = protect(provider.NewGemini(cfg.GeminiAPIKey), cfg.GeminiTimeoutMS)
 	}
 	slog.Info("providers enabled", "names", providers.Names())
+
+	// 5b. The router handles the model "auto": it picks a provider and falls back to the next one.
+	strategy, err := router.NewStrategy(cfg.RouteStrategy)
+	if err != nil {
+		return err
+	}
+	spec := cfg.RouteTargets
+	if spec == "" {
+		spec = router.DefaultTargetSpec(providers)
+	}
+	targets, err := router.ParseTargets(spec, providers)
+	if err != nil {
+		return err
+	}
+	autoRouter := router.New(targets, strategy)
+	slog.Info("router ready", "strategy", cfg.RouteStrategy, "targets", spec)
+
+	// Ping the providers in the background (this costs no tokens). It stops when we shut down.
+	if cfg.HealthCheckSeconds > 0 {
+		go autoRouter.RunHealthChecks(ctx, time.Duration(cfg.HealthCheckSeconds)*time.Second)
+	}
 
 	// 6. Start the HTTP server.
 	if cfg.AdminToken == "" {
@@ -104,6 +128,7 @@ func run() error {
 		Providers:  providers,
 		Tenants:    store.NewTenants(db),
 		AdminToken: cfg.AdminToken,
+		Router:     autoRouter,
 		Limiter: ratelimit.New(rdb, cfg.RateLimitFailOpen,
 			time.Duration(cfg.RateLimitTimeoutMS)*time.Millisecond),
 		Budget: usage.NewBudget(rdb, cfg.RateLimitFailOpen,
