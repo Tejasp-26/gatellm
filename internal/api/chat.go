@@ -63,7 +63,13 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Model = modelName
 
-	// 4. Check the rate limits. This takes a request and an estimate of tokens from the tenant.
+	// 4. Check that the monthly budget is not used up. Do this first, so a rejected
+	// request does not use up any rate limit.
+	if !h.checkBudget(w, r) {
+		return
+	}
+
+	// 5. Check the rate limits. This takes a request and an estimate of tokens from the tenant.
 	res, ok := h.reserve(w, r, &req)
 	if !ok {
 		return
@@ -75,7 +81,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Call the provider.
+	// 6. Call the provider.
 	resp, err := p.Chat(r.Context(), &req)
 	if err != nil {
 		res.refund() // nothing was used, give the reserved tokens back
@@ -90,12 +96,14 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 6. Replace the estimate with the real token count, then send the answer.
+	// 7. Replace the estimate with the real token count, add the cost to the monthly
+	// budget, then send the answer.
 	answerChars := 0
 	if len(resp.Choices) > 0 {
 		answerChars = utf8.RuneCountInString(resp.Choices[0].Message.Content)
 	}
 	res.settle(&resp.Usage, answerChars)
+	h.recordSpend(r.Context(), p.Name(), req.Model, &resp.Usage, estimatePromptTokens(&req), answerChars)
 	w.Header().Set("X-Provider", p.Name())
 	writeJSON(w, http.StatusOK, resp)
 }

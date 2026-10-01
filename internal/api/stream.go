@@ -107,7 +107,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	// we fix the token count with what was really produced.
 	pieces := 0
 	answerChars := 0
-	defer func() { res.settle(usage, answerChars) }()
+	defer func() {
+		res.settle(usage, answerChars)
+		h.recordSpend(r.Context(), p.Name(), req.Model, usage, estimatePromptTokens(req), answerChars)
+	}()
 
 	for chunk := range chunks {
 		if chunk.Err != nil {

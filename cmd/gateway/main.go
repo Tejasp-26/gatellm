@@ -15,6 +15,7 @@ import (
 	"gatellm/internal/provider"
 	"gatellm/internal/ratelimit"
 	"gatellm/internal/store"
+	"gatellm/internal/usage"
 	"gatellm/migrations"
 )
 
@@ -84,6 +85,8 @@ func run() error {
 		Tenants:    store.NewTenants(db),
 		AdminToken: cfg.AdminToken,
 		Limiter: ratelimit.New(rdb, cfg.RateLimitFailOpen,
+			time.Duration(cfg.RateLimitTimeoutMS)*time.Millisecond),
+		Budget: usage.NewBudget(rdb, cfg.RateLimitFailOpen,
 			time.Duration(cfg.RateLimitTimeoutMS)*time.Millisecond),
 	}
 	mode := "closed"
