@@ -22,6 +22,9 @@ type Config struct {
 	GeminiAPIKey string  // optional, gemini is enabled only if set
 	MockLatency  int     // mock provider delay in milliseconds
 	MockErrorPct float64 // mock provider failure rate: 0 (never) to 1 (always)
+
+	RateLimitFailOpen  bool // what to do when Redis is down: true = let requests pass, false = reject them
+	RateLimitTimeoutMS int  // max time for one rate limit check in Redis, in milliseconds
 }
 
 // Load reads env variables and checks that the required ones exist.
@@ -64,6 +67,24 @@ func Load() (*Config, error) {
 	if cfg.MockErrorPct < 0 || cfg.MockErrorPct > 1 {
 		return nil, fmt.Errorf("MOCK_ERROR_RATE must be between 0 and 1")
 	}
+
+	// What happens to requests when the rate limiter cannot reach Redis.
+	switch mode := strings.ToLower(getEnv("RATE_LIMIT_ON_REDIS_DOWN", "closed")); mode {
+	case "closed":
+		cfg.RateLimitFailOpen = false
+	case "open":
+		cfg.RateLimitFailOpen = true
+	default:
+		return nil, fmt.Errorf("RATE_LIMIT_ON_REDIS_DOWN must be \"open\" or \"closed\", got %q", mode)
+	}
+	timeout, err := getInt64("RATE_LIMIT_TIMEOUT_MS", 500)
+	if err != nil {
+		return nil, err
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("RATE_LIMIT_TIMEOUT_MS must be bigger than 0")
+	}
+	cfg.RateLimitTimeoutMS = int(timeout)
 	return cfg, nil
 }
 

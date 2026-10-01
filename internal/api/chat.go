@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"gatellm/internal/provider"
 )
@@ -62,15 +63,22 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Model = modelName
 
-	// Streaming has its own flow.
-	if req.Stream {
-		h.streamChat(w, r, p, &req)
+	// 4. Check the rate limits. This takes a request and an estimate of tokens from the tenant.
+	res, ok := h.reserve(w, r, &req)
+	if !ok {
 		return
 	}
 
-	// 4. Call the provider.
+	// Streaming has its own flow.
+	if req.Stream {
+		h.streamChat(w, r, p, &req, res)
+		return
+	}
+
+	// 5. Call the provider.
 	resp, err := p.Chat(r.Context(), &req)
 	if err != nil {
+		res.refund() // nothing was used, give the reserved tokens back
 		// The full error goes to the log. The client gets a short, safe message.
 		slog.Warn("provider call failed",
 			"request_id", RequestIDFrom(r.Context()),
@@ -82,7 +90,12 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Send the answer.
+	// 6. Replace the estimate with the real token count, then send the answer.
+	answerChars := 0
+	if len(resp.Choices) > 0 {
+		answerChars = utf8.RuneCountInString(resp.Choices[0].Message.Content)
+	}
+	res.settle(&resp.Usage, answerChars)
 	w.Header().Set("X-Provider", p.Name())
 	writeJSON(w, http.StatusOK, resp)
 }

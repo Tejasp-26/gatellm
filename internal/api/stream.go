@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"gatellm/internal/provider"
 )
@@ -51,7 +52,7 @@ func writeSSEJSON(w http.ResponseWriter, f http.Flusher, v any) error {
 }
 
 // streamChat answers a chat request with a Server-Sent Events stream.
-func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.Provider, req *provider.ChatRequest) {
+func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.Provider, req *provider.ChatRequest, res *reservation) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "server_error", "streaming is not supported here")
@@ -68,6 +69,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	chunks, err := p.ChatStream(ctx, req)
 	if err != nil {
 		// We have not sent anything yet, so a normal JSON error is still possible.
+		res.refund()
 		slog.Warn("provider stream failed to start",
 			"request_id", RequestIDFrom(ctx),
 			"tenant_id", tenantIDFrom(ctx),
@@ -86,6 +88,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	var usage *provider.Usage
 	id := "chatcmpl-" + RequestIDFrom(ctx)
 	created := time.Now().Unix()
 	newChunk := func(delta sseDelta, finish *string) sseChunk {
@@ -100,8 +103,12 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 		return
 	}
 
-	var usage *provider.Usage
+	// Whatever way the stream ends (finished, error, client left),
+	// we fix the token count with what was really produced.
 	pieces := 0
+	answerChars := 0
+	defer func() { res.settle(usage, answerChars) }()
+
 	for chunk := range chunks {
 		if chunk.Err != nil {
 			// The provider broke in the middle. We cannot change the 200 status any more,
@@ -133,6 +140,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 			reason := chunk.FinishReason
 			finish = &reason
 		}
+		answerChars += utf8.RuneCountInString(chunk.Content)
 		if err := writeSSEJSON(w, flusher, newChunk(sseDelta{Content: chunk.Content}, finish)); err != nil {
 			// Writing failed: the client is gone. The deferred cancel() stops the provider.
 			slog.Info("client disconnected during stream",

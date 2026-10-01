@@ -20,6 +20,7 @@ type Handler struct {
 	Providers  provider.Registry
 	Tenants    TenantStore
 	AdminToken string
+	Limiter    RateLimiter // nil = no rate limiting
 }
 
 // writeJSON is a small helper to send JSON responses.

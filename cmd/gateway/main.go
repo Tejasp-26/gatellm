@@ -13,6 +13,7 @@ import (
 	"gatellm/internal/api"
 	"gatellm/internal/config"
 	"gatellm/internal/provider"
+	"gatellm/internal/ratelimit"
 	"gatellm/internal/store"
 	"gatellm/migrations"
 )
@@ -82,7 +83,14 @@ func run() error {
 		Providers:  providers,
 		Tenants:    store.NewTenants(db),
 		AdminToken: cfg.AdminToken,
+		Limiter: ratelimit.New(rdb, cfg.RateLimitFailOpen,
+			time.Duration(cfg.RateLimitTimeoutMS)*time.Millisecond),
 	}
+	mode := "closed"
+	if cfg.RateLimitFailOpen {
+		mode = "open"
+	}
+	slog.Info("rate limiting on", "on_redis_down", mode)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           api.NewRouter(handler, cfg.MaxBodyBytes),
