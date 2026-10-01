@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gatellm/internal/api"
+	"gatellm/internal/breaker"
 	"gatellm/internal/config"
 	"gatellm/internal/provider"
 	"gatellm/internal/ratelimit"
@@ -63,14 +64,33 @@ func run() error {
 	}
 
 	// 5. Build the providers. Mock is always on. Groq and Gemini need an API key.
+	// Every provider is wrapped with timeout + retry + circuit breaker.
+	// Each provider gets its OWN breaker, so a broken Groq does not block Gemini.
+	protect := func(p provider.Provider, timeoutMS int) provider.Provider {
+		if timeoutMS == 0 {
+			timeoutMS = cfg.ProviderTimeoutMS // no special timeout for this provider
+		}
+		return provider.NewResilient(p, provider.ResilientConfig{
+			Timeout: time.Duration(timeoutMS) * time.Millisecond,
+			Retry: provider.RetryConfig{
+				MaxAttempts: cfg.RetryMaxAttempts,
+				BaseDelay:   time.Duration(cfg.RetryBaseMS) * time.Millisecond,
+				MaxDelay:    time.Duration(cfg.RetryMaxMS) * time.Millisecond,
+			},
+			Breaker: breaker.Config{
+				FailureThreshold: cfg.BreakerFailures,
+				Cooldown:         time.Duration(cfg.BreakerCooldownSec) * time.Second,
+			},
+		})
+	}
 	providers := provider.Registry{
-		"mock": provider.NewMock(time.Duration(cfg.MockLatency)*time.Millisecond, cfg.MockErrorPct),
+		"mock": protect(provider.NewMock(time.Duration(cfg.MockLatency)*time.Millisecond, cfg.MockErrorPct), 0),
 	}
 	if cfg.GroqAPIKey != "" {
-		providers["groq"] = provider.NewGroq(cfg.GroqAPIKey)
+		providers["groq"] = protect(provider.NewGroq(cfg.GroqAPIKey), cfg.GroqTimeoutMS)
 	}
 	if cfg.GeminiAPIKey != "" {
-		providers["gemini"] = provider.NewGemini(cfg.GeminiAPIKey)
+		providers["gemini"] = protect(provider.NewGemini(cfg.GeminiAPIKey), cfg.GeminiTimeoutMS)
 	}
 	slog.Info("providers enabled", "names", providers.Names())
 

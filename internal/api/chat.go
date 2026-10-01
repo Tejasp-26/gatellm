@@ -1,14 +1,27 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"unicode/utf8"
 
+	"gatellm/internal/breaker"
 	"gatellm/internal/provider"
 )
+
+// writeUpstreamError tells the client that the provider call failed.
+// 502: the provider failed.  503: we did not even try, because its circuit breaker is open.
+func writeUpstreamError(w http.ResponseWriter, p provider.Provider, err error) {
+	if errors.Is(err, breaker.ErrOpen) {
+		writeError(w, http.StatusServiceUnavailable, "upstream_unavailable",
+			"the "+p.Name()+" provider is having problems and is paused for a short time, please try again shortly")
+		return
+	}
+	writeError(w, http.StatusBadGateway, "upstream_error", "the "+p.Name()+" provider failed, please try again")
+}
 
 // validate checks the request and returns an error message ("" means OK).
 func validate(req *provider.ChatRequest) string {
@@ -92,7 +105,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 			"provider", p.Name(),
 			"err", err,
 		)
-		writeError(w, http.StatusBadGateway, "upstream_error", "the "+p.Name()+" provider failed, please try again")
+		writeUpstreamError(w, p, err)
 		return
 	}
 

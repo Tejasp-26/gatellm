@@ -25,6 +25,16 @@ type Config struct {
 
 	RateLimitFailOpen  bool // what to do when Redis is down: true = let requests pass, false = reject them
 	RateLimitTimeoutMS int  // max time for one rate limit check in Redis, in milliseconds
+
+	// Reliability (Phase 5): timeouts, retries and circuit breaker, for every provider.
+	ProviderTimeoutMS  int // max time for ONE attempt (for a stream: until it starts)
+	GroqTimeoutMS      int // optional, overrides ProviderTimeoutMS for groq
+	GeminiTimeoutMS    int // optional, overrides ProviderTimeoutMS for gemini
+	RetryMaxAttempts   int // total tries, including the first one
+	RetryBaseMS        int // wait before the first retry
+	RetryMaxMS         int // the wait never grows above this
+	BreakerFailures    int // failures in a row that open the circuit breaker
+	BreakerCooldownSec int // how long the breaker stays open
 }
 
 // Load reads env variables and checks that the required ones exist.
@@ -85,6 +95,32 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RATE_LIMIT_TIMEOUT_MS must be bigger than 0")
 	}
 	cfg.RateLimitTimeoutMS = int(timeout)
+
+	// Reliability settings. Each one must be a positive number (the provider timeouts may be 0 = use the default).
+	for _, s := range []struct {
+		name     string
+		fallback int64
+		dest     *int
+		allow0   bool
+	}{
+		{"PROVIDER_TIMEOUT_MS", 30000, &cfg.ProviderTimeoutMS, false},
+		{"GROQ_TIMEOUT_MS", 0, &cfg.GroqTimeoutMS, true},
+		{"GEMINI_TIMEOUT_MS", 0, &cfg.GeminiTimeoutMS, true},
+		{"RETRY_MAX_ATTEMPTS", 3, &cfg.RetryMaxAttempts, false},
+		{"RETRY_BASE_MS", 200, &cfg.RetryBaseMS, false},
+		{"RETRY_MAX_MS", 2000, &cfg.RetryMaxMS, false},
+		{"BREAKER_FAILURES", 5, &cfg.BreakerFailures, false},
+		{"BREAKER_COOLDOWN_SECONDS", 30, &cfg.BreakerCooldownSec, false},
+	} {
+		n, err := getInt64(s.name, s.fallback)
+		if err != nil {
+			return nil, err
+		}
+		if n < 0 || (n == 0 && !s.allow0) {
+			return nil, fmt.Errorf("%s must be bigger than 0", s.name)
+		}
+		*s.dest = int(n)
+	}
 	return cfg, nil
 }
 

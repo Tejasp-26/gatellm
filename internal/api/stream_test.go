@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"gatellm/internal/breaker"
 	"gatellm/internal/provider"
 )
 
@@ -227,5 +228,33 @@ func TestStreamStopsWhenClientLeaves(t *testing.T) {
 		// good: the provider goroutine ended
 	case <-time.After(3 * time.Second):
 		t.Fatal("the provider was not cancelled after the client left")
+	}
+}
+
+// openProvider behaves like a provider whose circuit breaker is open.
+type openProvider struct{}
+
+func (openProvider) Name() string { return "mock" }
+func (openProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+	return nil, breaker.ErrOpen
+}
+func (openProvider) ChatStream(ctx context.Context, req *provider.ChatRequest) (<-chan provider.StreamChunk, error) {
+	return nil, breaker.ErrOpen
+}
+
+// An open circuit gives 503 (not 502), for normal and for streaming requests.
+func TestOpenCircuitGives503(t *testing.T) {
+	srv := newServerWith("mock", openProvider{})
+	for _, body := range []string{
+		`{"model":"mock","messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"mock","stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+	} {
+		rec := streamPost(srv, body)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("status %d, want 503, body %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "upstream_unavailable") {
+			t.Errorf("wrong error type: %s", rec.Body.String())
+		}
 	}
 }

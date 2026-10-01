@@ -76,7 +76,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, p provider.
 			"provider", p.Name(),
 			"err", err,
 		)
-		writeError(w, http.StatusBadGateway, "upstream_error", "the "+p.Name()+" provider failed, please try again")
+		writeUpstreamError(w, p, err)
 		return
 	}
 
