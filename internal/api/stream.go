@@ -68,6 +68,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend,
 	start := time.Now()
 	chunks, sv, err := be.stream(ctx, req)
 	setRouteHeader(w, be, sv)
+	h.noteFallback(sv, err)
 	if err != nil {
 		// We have not sent anything yet, so a normal JSON error is still possible.
 		res.refund()
@@ -111,6 +112,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend,
 	pieces := 0
 	answerChars := 0
 	status := "ok"
+	gotFirstText := false
 	defer func() {
 		res.settle(usage, answerChars)
 		h.recordSpend(r.Context(), sv.Provider, sv.Model, usage, estimatePromptTokens(req), answerChars)
@@ -155,6 +157,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend,
 		if chunk.FinishReason != "" {
 			reason := chunk.FinishReason
 			finish = &reason
+		}
+		if !gotFirstText && chunk.Content != "" {
+			gotFirstText = true
+			h.Metrics.FirstToken(sv.Provider, time.Since(start)) // time to first token
 		}
 		answerChars += utf8.RuneCountInString(chunk.Content)
 		if err := writeSSEJSON(w, flusher, newChunk(sseDelta{Content: chunk.Content}, finish)); err != nil {

@@ -18,11 +18,15 @@ const startedAtKey ctxKey = "started_at"
 
 // latencyMS is how long this request has been running (used for the usage event).
 func latencyMS(ctx context.Context) int {
+	return int(latency(ctx).Milliseconds())
+}
+
+func latency(ctx context.Context) time.Duration {
 	start, ok := ctx.Value(startedAtKey).(time.Time)
 	if !ok {
 		return 0
 	}
-	return int(time.Since(start).Milliseconds())
+	return time.Since(start)
 }
 
 // RequestIDFrom gets the request id out of the context (empty string if missing).

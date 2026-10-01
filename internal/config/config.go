@@ -59,13 +59,15 @@ type Config struct {
 
 	// Usage pipeline (Phase 7): events go through a Redis Stream into Postgres.
 	UsageEnabled        bool
-	UsageBatch          int  // events read and written at once
-	UsagePollMS         int  // how long one read waits for new events (see UsageBlocking)
-	UsageBlocking       bool // true = Redis holds the read open, false = we sleep UsagePollMS between reads
-	UsageClaimIdleSec   int  // unconfirmed messages older than this are taken over from dead consumers
-	UsageDrainSec       int  // at shutdown, the most time we spend writing the events that are left
-	UsageStreamMaxLen   int  // the stream keeps about this many events at most
-	UsagePublishTimeout int  // max time to put one event in the stream, in milliseconds
+	MetricsEnabled      bool   // serve GET /metrics
+	MetricsToken        string // if set, /metrics needs this bearer token
+	UsageBatch          int    // events read and written at once
+	UsagePollMS         int    // how long one read waits for new events (see UsageBlocking)
+	UsageBlocking       bool   // true = Redis holds the read open, false = we sleep UsagePollMS between reads
+	UsageClaimIdleSec   int    // unconfirmed messages older than this are taken over from dead consumers
+	UsageDrainSec       int    // at shutdown, the most time we spend writing the events that are left
+	UsageStreamMaxLen   int    // the stream keeps about this many events at most
+	UsagePublishTimeout int    // max time to put one event in the stream, in milliseconds
 }
 
 // Load reads env variables and checks that the required ones exist.
@@ -234,6 +236,11 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("EMBEDDING_PROVIDER must be \"mock\" or \"gemini\", got %q", cfg.EmbeddingProvider)
 		}
 	}
+
+	if cfg.MetricsEnabled, err = getBool("METRICS_ENABLED", true); err != nil {
+		return nil, err
+	}
+	cfg.MetricsToken = os.Getenv("METRICS_TOKEN")
 
 	if cfg.UsageEnabled, err = getBool("USAGE_PIPELINE_ENABLED", true); err != nil {
 		return nil, err

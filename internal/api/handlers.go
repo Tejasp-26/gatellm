@@ -13,6 +13,7 @@ import (
 
 	"gatellm/internal/cache"
 	"gatellm/internal/embed"
+	"gatellm/internal/metrics"
 	"gatellm/internal/provider"
 	"gatellm/internal/router"
 )
@@ -24,13 +25,16 @@ type Handler struct {
 	Providers  provider.Registry
 	Tenants    TenantStore
 	AdminToken string
-	Limiter    RateLimiter    // nil = no rate limiting
-	Budget     BudgetTracker  // nil = no monthly budget
-	Router     AutoRouter     // nil = the model "auto" is not available
-	Cache      cache.Cache    // nil = no caching
-	Semantic   cache.Semantic // nil = no semantic cache (needs Embedder too)
-	Embedder   embed.Embedder // turns a prompt into a vector
-	Usage      UsageRecorder  // nil = usage events are not recorded
+	Limiter    RateLimiter      // nil = no rate limiting
+	Budget     BudgetTracker    // nil = no monthly budget
+	Router     AutoRouter       // nil = the model "auto" is not available
+	Cache      cache.Cache      // nil = no caching
+	Semantic   cache.Semantic   // nil = no semantic cache (needs Embedder too)
+	Embedder   embed.Embedder   // turns a prompt into a vector
+	Usage      UsageRecorder    // nil = usage events are not recorded
+	Metrics    *metrics.Metrics // nil = no metrics (every call on it does nothing)
+
+	MetricsToken string // if not empty, GET /metrics needs "Authorization: Bearer <this>"
 
 	CacheAllowTemperature bool // also cache requests with temperature above 0 (or none)
 

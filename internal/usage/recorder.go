@@ -15,6 +15,8 @@ type Recorder struct {
 	stream   *Stream
 	fallback EventWriter
 	timeout  time.Duration
+
+	Counters *Counters // optional, for /metrics
 }
 
 func NewRecorder(stream *Stream, fallback EventWriter, timeout time.Duration) *Recorder {
@@ -28,6 +30,7 @@ func (r *Recorder) Record(ctx context.Context, e Event) {
 
 	err := r.stream.Publish(ctx, e)
 	if err == nil {
+		r.Counters.addPublished()
 		return
 	}
 	slog.Warn("could not publish usage event, writing it to Postgres directly",
@@ -36,7 +39,10 @@ func (r *Recorder) Record(ctx context.Context, e Event) {
 	// The first timeout may be used up, so the fallback gets its own.
 	ctx2, cancel2 := context.WithTimeout(context.WithoutCancel(ctx), 3*r.timeout)
 	defer cancel2()
-	if err := r.fallback.Write(ctx2, []Event{e}); err != nil {
+	if err := r.fallback.Write(ctx2, []Event{e}); err == nil {
+		r.Counters.addFallback()
+	} else {
+		r.Counters.addLost()
 		slog.Error("USAGE EVENT LOST (stream and database both failed)",
 			"request_id", e.RequestID, "tenant_id", e.TenantID, "provider", e.Provider, "model", e.Model,
 			"prompt_tokens", e.PromptTokens, "completion_tokens", e.CompletionTokens,

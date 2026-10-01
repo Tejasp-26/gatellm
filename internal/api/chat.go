@@ -166,6 +166,7 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 6. Call the provider (or the router, which may try several).
 	resp, sv, err := be.chat(r.Context(), &req)
 	setRouteHeader(w, be, sv)
+	h.noteFallback(sv, err)
 	if err != nil {
 		res.refund() // nothing was used, give the reserved tokens back
 		h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model,

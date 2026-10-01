@@ -442,3 +442,54 @@ func TestStreamIsTrimmedToTheMaximum(t *testing.T) {
 		t.Errorf("the stream must stay small, has %d entries", n)
 	}
 }
+
+func TestCountersFollowThePipeline(t *testing.T) {
+	// 1) published
+	rdb := newRedis(t)
+	c := &Counters{}
+	rec := NewRecorder(NewStream(rdb, 1000), newFakeWriter(), time.Second)
+	rec.Counters = c
+	rec.Record(context.Background(), sampleEvent("cnt-1"))
+	if c.Published() != 1 || c.Fallback() != 0 || c.Lost() != 0 {
+		t.Errorf("published/fallback/lost = %d/%d/%d, want 1/0/0", c.Published(), c.Fallback(), c.Lost())
+	}
+
+	// 2) fallback (Redis down) and 3) lost (Redis and database down)
+	dead := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: 0, DialTimeout: 100 * time.Millisecond})
+	fb := newFakeWriter()
+	rec2 := NewRecorder(NewStream(dead, 1000), fb, 300*time.Millisecond)
+	rec2.Counters = c
+	rec2.Record(context.Background(), sampleEvent("cnt-2"))
+	fb.alwaysErr = errors.New("database is down too")
+	rec2.Record(context.Background(), sampleEvent("cnt-3"))
+	if c.Fallback() != 1 || c.Lost() != 1 {
+		t.Errorf("fallback/lost = %d/%d, want 1/1", c.Fallback(), c.Lost())
+	}
+}
+
+func TestConsumerCountsWrittenAndDead(t *testing.T) {
+	rdb := newRedis(t)
+	w := newFakeWriter()
+	ctx := context.Background()
+	publish(t, rdb, 3, "ok")
+	rdb.XAdd(ctx, &redis.XAddArgs{Stream: StreamKey, Values: map[string]any{"request_id": "bad", "tenant_id": "nope"}})
+
+	cons := NewConsumer(rdb, w, fastConfig("c1"))
+	cons.Counters = &Counters{}
+	stop := startConsumer(t, cons, 5*time.Second)
+	waitFor(t, "3 events written", func() bool { return w.count() == 3 })
+	waitFor(t, "poison message counted", func() bool { return cons.Counters.Dead() == 1 })
+	stop()
+	if cons.Counters.Written() != 3 {
+		t.Errorf("written = %d, want 3", cons.Counters.Written())
+	}
+}
+
+func TestNilCountersAreSafe(t *testing.T) {
+	var c *Counters
+	c.addPublished()
+	c.addWritten(5)
+	if c.Published() != 0 || c.Written() != 0 || c.Lost() != 0 {
+		t.Error("a nil Counters must read as zero")
+	}
+}

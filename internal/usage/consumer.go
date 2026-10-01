@@ -32,6 +32,8 @@ type Consumer struct {
 	w   EventWriter
 	cfg ConsumerConfig
 
+	Counters *Counters // optional, for /metrics
+
 	needPending bool // true = first read the messages that were delivered to us but never confirmed
 	failures    int  // failures in a row, used for the backoff
 }
@@ -156,6 +158,7 @@ func (c *Consumer) process(msgs []redis.XMessage) error {
 
 	err := c.w.Write(ctx, events)
 	if err == nil {
+		c.Counters.addWritten(len(events))
 		return c.ack(ctx, kept...)
 	}
 	if len(events) == 1 {
@@ -171,6 +174,7 @@ func (c *Consumer) process(msgs []redis.XMessage) error {
 		err := c.w.Write(ctx, []Event{ev})
 		switch {
 		case err == nil:
+			c.Counters.addWritten(1)
 			if e := c.ack(ctx, kept[i]); e != nil && firstErr == nil {
 				firstErr = e
 			}
@@ -208,6 +212,7 @@ func (c *Consumer) deadLetter(ctx context.Context, m redis.XMessage, cause error
 	if err != nil {
 		return err
 	}
+	c.Counters.addDead()
 	slog.Warn("usage event moved to the dead-letter stream",
 		"request_id", m.Values["request_id"], "reason", cause.Error())
 	return c.ack(ctx, m)

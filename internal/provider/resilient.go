@@ -15,6 +15,9 @@ type ResilientConfig struct {
 	Timeout time.Duration // max time for ONE attempt
 	Retry   RetryConfig
 	Breaker breaker.Config
+
+	// OnRetry is called before every retry (can be nil). The metrics use it.
+	OnRetry func(provider string)
 }
 
 // Resilient wraps any Provider and adds a timeout, retries and a circuit breaker.
@@ -45,6 +48,9 @@ func NewResilient(inner Provider, cfg ResilientConfig) *Resilient {
 	r.onRetry = func(attempt int, wait time.Duration, err error) {
 		slog.Warn("provider call failed, will retry",
 			"provider", name, "attempt", attempt, "wait_ms", wait.Milliseconds(), "err", err)
+		if cfg.OnRetry != nil {
+			cfg.OnRetry(name)
+		}
 	}
 	return &Resilient{inner: inner, timeout: cfg.Timeout, retry: r, breaker: breaker.New(cfg.Breaker)}
 }

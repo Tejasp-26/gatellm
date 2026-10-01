@@ -34,7 +34,7 @@ type usageInfo struct {
 func (h *Handler) recordUsage(ctx context.Context, in usageInfo) {
 	tenant := TenantFrom(ctx)
 	id := RequestIDFrom(ctx)
-	if h.Usage == nil || tenant == nil || id == "" {
+	if tenant == nil || id == "" {
 		return
 	}
 	model := in.model
@@ -49,7 +49,11 @@ func (h *Handler) recordUsage(ctx context.Context, in usageInfo) {
 	if in.charged {
 		ev.PromptTokens, ev.CompletionTokens, ev.CostUSD = chargeOf(in.provider, in.model, in.u, in.promptEstimate, in.answerChars)
 	}
-	h.Usage.Record(ctx, ev)
+	// The same numbers go to Prometheus (live graphs) and to the usage pipeline (the permanent record).
+	h.Metrics.Chat(ev.Provider, ev.CacheStatus, ev.Status, ev.PromptTokens, ev.CompletionTokens, ev.CostUSD, latency(ctx))
+	if h.Usage != nil {
+		h.Usage.Record(ctx, ev)
+	}
 }
 
 // plainCacheStatus is the cache status of a request that does not go through the cache code.

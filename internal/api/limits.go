@@ -80,6 +80,7 @@ func (h *Handler) reserve(w http.ResponseWriter, r *http.Request, req *provider.
 	d, err := h.Limiter.Allow(r.Context(), tenant.ID, lim, estimate)
 	if err != nil {
 		// Redis is down and we run in fail-closed mode.
+		h.Metrics.Rejected("limiter_down")
 		slog.Error("rate limiter unavailable, rejecting request",
 			"request_id", RequestIDFrom(r.Context()), "tenant_id", tenant.ID, "err", err)
 		writeError(w, http.StatusServiceUnavailable, "server_error",
@@ -98,6 +99,9 @@ func (h *Handler) reserve(w http.ResponseWriter, r *http.Request, req *provider.
 		what := "requests per minute"
 		if d.Reason == "tpm" {
 			what = "tokens per minute"
+			h.Metrics.Rejected("tpm")
+		} else {
+			h.Metrics.Rejected("rpm")
 		}
 		writeError(w, http.StatusTooManyRequests, "rate_limit_error",
 			"rate limit reached ("+what+"), retry in "+w.Header().Get("Retry-After")+" seconds")

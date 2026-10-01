@@ -15,6 +15,7 @@ import (
 	"gatellm/internal/cache"
 	"gatellm/internal/config"
 	"gatellm/internal/embed"
+	"gatellm/internal/metrics"
 	"gatellm/internal/provider"
 	"gatellm/internal/ratelimit"
 	"gatellm/internal/router"
@@ -69,10 +70,15 @@ func run() error {
 	// 5. Build the providers. Mock is always on. Groq and Gemini need an API key.
 	// Every provider is wrapped with timeout + retry + circuit breaker.
 	// Each provider gets its OWN breaker, so a broken Groq does not block Gemini.
+	var m *metrics.Metrics // nil when METRICS_ENABLED=false; every call on it is then a no-op
+	if cfg.MetricsEnabled {
+		m = metrics.New()
+	}
 	protect := func(p provider.Provider, timeoutMS int) provider.Provider {
 		if timeoutMS == 0 {
 			timeoutMS = cfg.ProviderTimeoutMS // no special timeout for this provider
 		}
+		name := p.Name()
 		return provider.NewResilient(p, provider.ResilientConfig{
 			Timeout: time.Duration(timeoutMS) * time.Millisecond,
 			Retry: provider.RetryConfig{
@@ -83,7 +89,10 @@ func run() error {
 			Breaker: breaker.Config{
 				FailureThreshold: cfg.BreakerFailures,
 				Cooldown:         time.Duration(cfg.BreakerCooldownSec) * time.Second,
+				// Count every breaker change in the metrics.
+				OnStateChange: func(from, to breaker.State) { m.BreakerChanged(name, to.String()) },
 			},
+			OnRetry: m.Retry,
 		})
 	}
 	providers := provider.Registry{
@@ -96,6 +105,12 @@ func run() error {
 	}
 	if cfg.GeminiAPIKey != "" {
 		providers["gemini"] = protect(provider.NewGemini(cfg.GeminiAPIKey), cfg.GeminiTimeoutMS)
+	}
+	// Show the breaker state of each provider as a gauge (0 closed, 1 open, 2 half-open).
+	for name, p := range providers {
+		if rp, ok := p.(*provider.Resilient); ok {
+			m.WatchBreaker(name, func() int { return int(rp.BreakerState()) })
+		}
 	}
 	slog.Info("providers enabled", "names", providers.Names())
 
@@ -125,12 +140,14 @@ func run() error {
 		slog.Warn("ADMIN_TOKEN is not set, the /admin endpoints are disabled")
 	}
 	handler := &api.Handler{
-		DB:         db,
-		Redis:      rdb,
-		Providers:  providers,
-		Tenants:    store.NewTenants(db),
-		AdminToken: cfg.AdminToken,
-		Router:     autoRouter,
+		DB:           db,
+		Redis:        rdb,
+		Providers:    providers,
+		Tenants:      store.NewTenants(db),
+		AdminToken:   cfg.AdminToken,
+		Metrics:      m,
+		MetricsToken: cfg.MetricsToken,
+		Router:       autoRouter,
 		Limiter: ratelimit.New(rdb, cfg.RateLimitFailOpen,
 			time.Duration(cfg.RateLimitTimeoutMS)*time.Millisecond),
 		Budget: usage.NewBudget(rdb, cfg.RateLimitFailOpen,
@@ -166,7 +183,9 @@ func run() error {
 	consumerDone := make(chan struct{})
 	if cfg.UsageEnabled {
 		writer := usage.NewPGWriter(db)
-		handler.Usage = usage.NewRecorder(usage.NewStream(rdb, int64(cfg.UsageStreamMaxLen)), writer,
+		counters := &usage.Counters{}
+		m.WatchUsage(counters)
+		rec := usage.NewRecorder(usage.NewStream(rdb, int64(cfg.UsageStreamMaxLen)), writer,
 			time.Duration(cfg.UsagePublishTimeout)*time.Millisecond)
 		consumer := usage.NewConsumer(rdb, writer, usage.ConsumerConfig{
 			Batch:     int64(cfg.UsageBatch),
@@ -174,6 +193,9 @@ func run() error {
 			Blocking:  cfg.UsageBlocking,
 			ClaimIdle: time.Duration(cfg.UsageClaimIdleSec) * time.Second,
 		})
+		rec.Counters = counters
+		handler.Usage = rec
+		consumer.Counters = counters
 		go func() {
 			consumer.Run(consumerCtx, time.Duration(cfg.UsageDrainSec)*time.Second)
 			close(consumerDone)

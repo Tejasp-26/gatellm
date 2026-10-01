@@ -81,6 +81,7 @@ func (h *Handler) chatCached(w http.ResponseWriter, r *http.Request, be backend,
 		}
 
 		resp, sv, err := be.chat(ctx, req)
+		h.noteFallback(sv, err)
 		if err != nil {
 			res.refund() // nothing was used
 			h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model, cacheStatus: "MISS", status: "error"})

@@ -15,12 +15,18 @@ func NewRouter(h *Handler, maxBodyBytes int64) http.Handler {
 	// Logger is outside Recoverer, so a panic is logged as a 500.
 	r.Use(RequestID)
 	r.Use(Logger)
+	r.Use(MetricsMiddleware(h.Metrics)) // outside Recoverer, so a panic is counted as a 500
 	r.Use(Recoverer)
 	r.Use(BodyLimit(maxBodyBytes))
 
 	// Open to everyone.
 	r.Get("/healthz", h.Healthz)
 	r.Get("/readyz", h.Readyz)
+
+	// Prometheus visits this page. Set METRICS_TOKEN to protect it.
+	if h.Metrics != nil {
+		r.Method(http.MethodGet, "/metrics", h.Metrics.Handler(h.MetricsToken))
+	}
 
 	// Client API: needs a tenant API key.
 	r.With(h.Auth).Post("/v1/chat/completions", h.ChatCompletions)

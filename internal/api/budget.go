@@ -28,6 +28,7 @@ func (h *Handler) checkBudget(w http.ResponseWriter, r *http.Request) bool {
 	st, err := h.Budget.Check(r.Context(), tenant.ID, tenant.MonthlyBudgetUSD)
 	if err != nil {
 		// Redis is down and we run in fail-closed mode.
+		h.Metrics.Rejected("budget_down")
 		slog.Error("budget tracker unavailable, rejecting request",
 			"request_id", RequestIDFrom(r.Context()), "tenant_id", tenant.ID, "err", err)
 		writeError(w, http.StatusServiceUnavailable, "server_error",
@@ -42,6 +43,7 @@ func (h *Handler) checkBudget(w http.ResponseWriter, r *http.Request) bool {
 
 	w.Header().Set("X-Budget-Remaining-USD", usage.FormatUSD(st.RemainingUSD))
 	if !st.Allowed {
+		h.Metrics.Rejected("budget")
 		// 402 Payment Required: waiting a few seconds will not help, so we do not send Retry-After.
 		writeError(w, http.StatusPaymentRequired, "insufficient_quota",
 			"the monthly budget of this account is used up, it resets at the start of next month (UTC)")
