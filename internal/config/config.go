@@ -42,6 +42,20 @@ type Config struct {
 	HealthCheckSeconds int     // how often to ping the providers, 0 = never
 	MockBLatency       int     // the second mock ("mock-b"), used to test fallback
 	MockBErrorPct      float64 // failure rate of mock-b
+
+	// Cache (Phase 6): exact-match answers in Redis.
+	CacheEnabled   bool // switch the cache on or off
+	CacheTTLSec    int  // how long an answer is kept
+	CacheAllowTemp bool // also cache requests with temperature above 0 (or none)
+	CacheTimeoutMS int  // max time for one cache call in Redis
+
+	// Semantic cache (Phase 6b): "almost the same question" found with pgvector.
+	SemanticEnabled   bool
+	SemanticThreshold float64 // minimum cosine similarity for a hit (0 to 1)
+	SemanticTimeoutMS int     // max time for one pgvector query
+	EmbeddingProvider string  // "mock" (no key needed) or "gemini"
+	EmbeddingModel    string  // for gemini, e.g. gemini-embedding-001
+	EmbeddingTimeout  int     // max time for one embedding call, in milliseconds
 }
 
 // Load reads env variables and checks that the required ones exist.
@@ -152,6 +166,64 @@ func Load() (*Config, error) {
 	if cfg.MockBErrorPct < 0 || cfg.MockBErrorPct > 1 {
 		return nil, fmt.Errorf("MOCK_B_ERROR_RATE must be between 0 and 1")
 	}
+
+	if cfg.CacheEnabled, err = getBool("CACHE_ENABLED", true); err != nil {
+		return nil, err
+	}
+	if cfg.CacheAllowTemp, err = getBool("CACHE_ALLOW_TEMPERATURE", false); err != nil {
+		return nil, err
+	}
+	ttl, err := getInt64("CACHE_TTL_SECONDS", 3600)
+	if err != nil {
+		return nil, err
+	}
+	cacheTimeout, err := getInt64("CACHE_TIMEOUT_MS", 200)
+	if err != nil {
+		return nil, err
+	}
+	if ttl <= 0 || cacheTimeout <= 0 {
+		return nil, fmt.Errorf("CACHE_TTL_SECONDS and CACHE_TIMEOUT_MS must be bigger than 0")
+	}
+	cfg.CacheTTLSec, cfg.CacheTimeoutMS = int(ttl), int(cacheTimeout)
+
+	// Semantic cache. It is off by default: it needs an embedding provider.
+	if cfg.SemanticEnabled, err = getBool("SEMANTIC_CACHE_ENABLED", false); err != nil {
+		return nil, err
+	}
+	if cfg.SemanticThreshold, err = getFloat("SEMANTIC_THRESHOLD", 0.92); err != nil {
+		return nil, err
+	}
+	if cfg.SemanticThreshold <= 0 || cfg.SemanticThreshold > 1 {
+		return nil, fmt.Errorf("SEMANTIC_THRESHOLD must be bigger than 0 and at most 1")
+	}
+	semTimeout, err := getInt64("SEMANTIC_TIMEOUT_MS", 1000)
+	if err != nil {
+		return nil, err
+	}
+	embTimeout, err := getInt64("EMBEDDING_TIMEOUT_MS", 3000)
+	if err != nil {
+		return nil, err
+	}
+	if semTimeout <= 0 || embTimeout <= 0 {
+		return nil, fmt.Errorf("SEMANTIC_TIMEOUT_MS and EMBEDDING_TIMEOUT_MS must be bigger than 0")
+	}
+	cfg.SemanticTimeoutMS, cfg.EmbeddingTimeout = int(semTimeout), int(embTimeout)
+	cfg.EmbeddingProvider = strings.ToLower(getEnv("EMBEDDING_PROVIDER", "mock"))
+	cfg.EmbeddingModel = getEnv("EMBEDDING_MODEL", "gemini-embedding-001")
+	if cfg.SemanticEnabled {
+		if !cfg.CacheEnabled {
+			return nil, fmt.Errorf("SEMANTIC_CACHE_ENABLED=true needs CACHE_ENABLED=true")
+		}
+		switch cfg.EmbeddingProvider {
+		case "mock":
+		case "gemini":
+			if cfg.GeminiAPIKey == "" {
+				return nil, fmt.Errorf("EMBEDDING_PROVIDER=gemini needs GEMINI_API_KEY")
+			}
+		default:
+			return nil, fmt.Errorf("EMBEDDING_PROVIDER must be \"mock\" or \"gemini\", got %q", cfg.EmbeddingProvider)
+		}
+	}
 	return cfg, nil
 }
 
@@ -186,4 +258,16 @@ func getFloat(key string, fallback float64) (float64, error) {
 		return 0, fmt.Errorf("%s must be a number, got %q", key, v)
 	}
 	return f, nil
+}
+
+func getBool(key string, fallback bool) (bool, error) {
+	v := getEnv(key, "")
+	if v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false, got %q", key, v)
+	}
+	return b, nil
 }

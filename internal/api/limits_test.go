@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 // fakeLimiter answers with a fixed decision and remembers what it was asked.
 type fakeLimiter struct {
+	mu       sync.Mutex // the concurrency tests call it from many goroutines
 	decision ratelimit.Decision
 	err      error
 
@@ -26,12 +28,16 @@ type fakeLimiter struct {
 }
 
 func (f *fakeLimiter) Allow(ctx context.Context, tenantID string, lim ratelimit.Limits, cost int64) (ratelimit.Decision, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.allowCalls++
 	f.lastCost, f.lastLimits, f.lastTenant = cost, lim, tenantID
 	return f.decision, f.err
 }
 
 func (f *fakeLimiter) Adjust(ctx context.Context, tenantID string, lim ratelimit.Limits, delta int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.adjustCalls++
 	f.deltas = append(f.deltas, delta)
 	return nil

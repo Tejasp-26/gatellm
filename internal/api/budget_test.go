@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"gatellm/internal/provider"
@@ -13,6 +14,7 @@ import (
 
 // fakeBudget answers with a fixed status and remembers what was added.
 type fakeBudget struct {
+	mu     sync.Mutex // the concurrency tests call it from many goroutines
 	status usage.BudgetStatus
 	err    error
 
@@ -24,12 +26,16 @@ type fakeBudget struct {
 }
 
 func (f *fakeBudget) Check(ctx context.Context, tenantID string, budgetUSD float64) (usage.BudgetStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.checkCalls++
 	f.lastTenant, f.lastBudget = tenantID, budgetUSD
 	return f.status, f.err
 }
 
 func (f *fakeBudget) Add(ctx context.Context, tenantID string, usd float64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.addedTenant = tenantID
 	f.added = append(f.added, usd)
 	return nil

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"gatellm/internal/breaker"
+	"gatellm/internal/cache"
 	"gatellm/internal/provider"
 	"gatellm/internal/router"
 )
@@ -101,6 +102,8 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clientModel := req.Model // the model exactly as the client sent it, used for the cache key
+
 	// 2. Check the fields.
 	if msg := validate(&req); msg != "" {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", msg)
@@ -142,6 +145,16 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	res, ok := h.reserve(w, r, &req)
 	if !ok {
 		return
+	}
+
+	// Cache: only for non-streaming requests with temperature 0 (see cache.Cacheable).
+	// Other requests get "X-Cache: BYPASS". If the cache is switched off there is no header.
+	if h.Cache != nil {
+		if cache.Cacheable(&req, h.CacheAllowTemperature) {
+			h.chatCached(w, r, be, &req, clientModel, res)
+			return
+		}
+		w.Header().Set("X-Cache", "BYPASS")
 	}
 
 	// Streaming has its own flow.

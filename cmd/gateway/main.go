@@ -12,7 +12,9 @@ import (
 
 	"gatellm/internal/api"
 	"gatellm/internal/breaker"
+	"gatellm/internal/cache"
 	"gatellm/internal/config"
+	"gatellm/internal/embed"
 	"gatellm/internal/provider"
 	"gatellm/internal/ratelimit"
 	"gatellm/internal/router"
@@ -134,6 +136,28 @@ func run() error {
 		Budget: usage.NewBudget(rdb, cfg.RateLimitFailOpen,
 			time.Duration(cfg.RateLimitTimeoutMS)*time.Millisecond),
 	}
+	if cfg.CacheEnabled {
+		handler.Cache = cache.NewRedis(rdb,
+			time.Duration(cfg.CacheTTLSec)*time.Second,
+			time.Duration(cfg.CacheTimeoutMS)*time.Millisecond)
+		handler.CacheAllowTemperature = cfg.CacheAllowTemp
+	}
+	if cfg.SemanticEnabled {
+		var embedder embed.Embedder
+		if cfg.EmbeddingProvider == "gemini" {
+			embedder = embed.NewOpenAICompatible(embed.GeminiBaseURL, cfg.GeminiAPIKey, cfg.EmbeddingModel,
+				embeddingDims, time.Duration(cfg.EmbeddingTimeout)*time.Millisecond)
+		} else {
+			embedder = embed.NewMock(embeddingDims)
+		}
+		sem := cache.NewPostgres(db, cfg.SemanticThreshold,
+			time.Duration(cfg.CacheTTLSec)*time.Second,
+			time.Duration(cfg.SemanticTimeoutMS)*time.Millisecond)
+		handler.Semantic, handler.Embedder = sem, embedder
+		go cleanSemanticCache(ctx, sem) // deletes old rows once an hour
+		slog.Info("semantic cache on", "embedding", cfg.EmbeddingProvider, "threshold", cfg.SemanticThreshold)
+	}
+	slog.Info("cache", "enabled", cfg.CacheEnabled, "ttl_seconds", cfg.CacheTTLSec, "allow_temperature", cfg.CacheAllowTemp)
 	mode := "closed"
 	if cfg.RateLimitFailOpen {
 		mode = "open"
@@ -169,4 +193,26 @@ func run() error {
 	}
 	slog.Info("gateway stopped cleanly")
 	return nil
+}
+
+// embeddingDims is the size of our vectors. It must match vector(768) in the migration.
+const embeddingDims = 768
+
+// cleanSemanticCache removes expired rows from the semantic cache once an hour, until ctx ends.
+func cleanSemanticCache(ctx context.Context, c *cache.Postgres) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := c.Cleanup(ctx)
+			if err != nil {
+				slog.Warn("semantic cache cleanup failed", "err", err)
+			} else if n > 0 {
+				slog.Info("semantic cache cleanup", "deleted_rows", n)
+			}
+		}
+	}
 }

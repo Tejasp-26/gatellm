@@ -9,7 +9,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 
+	"gatellm/internal/cache"
+	"gatellm/internal/embed"
 	"gatellm/internal/provider"
 	"gatellm/internal/router"
 )
@@ -21,9 +24,16 @@ type Handler struct {
 	Providers  provider.Registry
 	Tenants    TenantStore
 	AdminToken string
-	Limiter    RateLimiter   // nil = no rate limiting
-	Budget     BudgetTracker // nil = no monthly budget
-	Router     AutoRouter    // nil = the model "auto" is not available
+	Limiter    RateLimiter    // nil = no rate limiting
+	Budget     BudgetTracker  // nil = no monthly budget
+	Router     AutoRouter     // nil = the model "auto" is not available
+	Cache      cache.Cache    // nil = no caching
+	Semantic   cache.Semantic // nil = no semantic cache (needs Embedder too)
+	Embedder   embed.Embedder // turns a prompt into a vector
+
+	CacheAllowTemperature bool // also cache requests with temperature above 0 (or none)
+
+	flights singleflight.Group // groups identical requests that arrive at the same time
 }
 
 // AutoRouter is what the handlers need from the router (the real one is router.Router).
