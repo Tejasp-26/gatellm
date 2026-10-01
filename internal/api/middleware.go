@@ -14,6 +14,16 @@ import (
 type ctxKey string
 
 const requestIDKey ctxKey = "request_id"
+const startedAtKey ctxKey = "started_at"
+
+// latencyMS is how long this request has been running (used for the usage event).
+func latencyMS(ctx context.Context) int {
+	start, ok := ctx.Value(startedAtKey).(time.Time)
+	if !ok {
+		return 0
+	}
+	return int(time.Since(start).Milliseconds())
+}
 
 // RequestIDFrom gets the request id out of the context (empty string if missing).
 func RequestIDFrom(ctx context.Context) string {
@@ -31,6 +41,7 @@ func RequestID(next http.Handler) http.Handler {
 
 		w.Header().Set("X-Request-ID", id)
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
+		ctx = context.WithValue(ctx, startedAtKey, time.Now())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

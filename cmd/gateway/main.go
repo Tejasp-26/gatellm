@@ -158,6 +158,32 @@ func run() error {
 		slog.Info("semantic cache on", "embedding", cfg.EmbeddingProvider, "threshold", cfg.SemanticThreshold)
 	}
 	slog.Info("cache", "enabled", cfg.CacheEnabled, "ttl_seconds", cfg.CacheTTLSec, "allow_temperature", cfg.CacheAllowTemp)
+
+	// The usage pipeline: handlers put events in a Redis Stream, this consumer writes them to Postgres.
+	// It has its own context, because at shutdown it must keep running until the HTTP server is done.
+	consumerCtx, stopConsumer := context.WithCancel(context.Background())
+	defer stopConsumer()
+	consumerDone := make(chan struct{})
+	if cfg.UsageEnabled {
+		writer := usage.NewPGWriter(db)
+		handler.Usage = usage.NewRecorder(usage.NewStream(rdb, int64(cfg.UsageStreamMaxLen)), writer,
+			time.Duration(cfg.UsagePublishTimeout)*time.Millisecond)
+		consumer := usage.NewConsumer(rdb, writer, usage.ConsumerConfig{
+			Batch:     int64(cfg.UsageBatch),
+			Block:     time.Duration(cfg.UsagePollMS) * time.Millisecond,
+			Blocking:  cfg.UsageBlocking,
+			ClaimIdle: time.Duration(cfg.UsageClaimIdleSec) * time.Second,
+		})
+		go func() {
+			consumer.Run(consumerCtx, time.Duration(cfg.UsageDrainSec)*time.Second)
+			close(consumerDone)
+		}()
+		slog.Info("usage pipeline on", "batch", cfg.UsageBatch, "blocking_read", cfg.UsageBlocking)
+	} else {
+		close(consumerDone)
+		slog.Warn("usage pipeline is OFF: usage events are not recorded")
+	}
+
 	mode := "closed"
 	if cfg.RateLimitFailOpen {
 		mode = "open"
@@ -185,11 +211,22 @@ func run() error {
 		slog.Info("shutdown signal received, draining requests")
 	}
 
-	// Graceful shutdown: stop accepting new requests, wait up to 15s for running ones.
+	// Graceful shutdown, in this order:
+	//  1. Stop accepting new requests and wait up to 15s for the running ones.
+	//     Every handler puts its usage event in the stream BEFORE it returns, so after this step
+	//     all events of finished requests are in Redis.
+	//  2. Tell the consumer to stop reading. It then writes everything that is left to Postgres.
+	//  3. Wait until it is done. Only then the connections are closed (the defers above).
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return err
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		slog.Warn("some requests were still running at shutdown", "err", shutdownErr)
+	}
+	stopConsumer()
+	<-consumerDone
+	if shutdownErr != nil {
+		return shutdownErr
 	}
 	slog.Info("gateway stopped cleanly")
 	return nil

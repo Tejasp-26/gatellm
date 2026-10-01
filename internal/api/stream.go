@@ -71,6 +71,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend,
 	if err != nil {
 		// We have not sent anything yet, so a normal JSON error is still possible.
 		res.refund()
+		h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model,
+			cacheStatus: h.plainCacheStatus(), status: endStatus(r.Context())})
 		slog.Warn("provider stream failed to start",
 			"request_id", RequestIDFrom(ctx),
 			"tenant_id", tenantIDFrom(ctx),
@@ -104,22 +106,27 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend,
 		}
 	}
 
-	// The first chunk only announces the role, like OpenAI does.
-	if err := writeSSEJSON(w, flusher, newChunk(sseDelta{Role: "assistant"}, nil)); err != nil {
-		return
-	}
-
-	// Whatever way the stream ends (finished, error, client left),
-	// we fix the token count with what was really produced.
+	// Whatever way the stream ends (finished, error, client left), we fix the token count
+	// with what was really produced, add the cost and record the usage event.
 	pieces := 0
 	answerChars := 0
+	status := "ok"
 	defer func() {
 		res.settle(usage, answerChars)
 		h.recordSpend(r.Context(), sv.Provider, sv.Model, usage, estimatePromptTokens(req), answerChars)
+		h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model, cacheStatus: h.plainCacheStatus(),
+			status: status, charged: true, u: usage, promptEstimate: estimatePromptTokens(req), answerChars: answerChars})
 	}()
+
+	// The first chunk only announces the role, like OpenAI does.
+	if err := writeSSEJSON(w, flusher, newChunk(sseDelta{Role: "assistant"}, nil)); err != nil {
+		status = "cancelled"
+		return
+	}
 
 	for chunk := range chunks {
 		if chunk.Err != nil {
+			status = "stream_error"
 			// The provider broke in the middle. We cannot change the 200 status any more,
 			// so we send an error event and end the stream (no [DONE]).
 			slog.Warn("provider stream failed in the middle",
@@ -152,6 +159,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend,
 		answerChars += utf8.RuneCountInString(chunk.Content)
 		if err := writeSSEJSON(w, flusher, newChunk(sseDelta{Content: chunk.Content}, finish)); err != nil {
 			// Writing failed: the client is gone. The deferred cancel() stops the provider.
+			status = "cancelled"
 			slog.Info("client disconnected during stream",
 				"request_id", RequestIDFrom(ctx), "provider", sv.Provider, "pieces_sent", pieces)
 			return
@@ -161,6 +169,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, r *http.Request, be backend,
 
 	// The channel closes on its own when the answer is complete, or when ctx was cancelled.
 	if ctx.Err() != nil {
+		status = "cancelled"
 		slog.Info("client disconnected during stream",
 			"request_id", RequestIDFrom(ctx), "provider", sv.Provider, "pieces_sent", pieces)
 		return

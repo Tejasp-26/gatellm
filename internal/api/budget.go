@@ -59,6 +59,12 @@ func costTokens(u *provider.Usage, promptEstimate int64, answerChars int) (promp
 	return int(promptEstimate), answerChars / 4
 }
 
+// chargeOf is the tokens and the cost we charge for a finished request.
+func chargeOf(providerName, model string, u *provider.Usage, promptEstimate int64, answerChars int) (prompt, completion int, cost float64) {
+	prompt, completion = costTokens(u, promptEstimate, answerChars)
+	return prompt, completion, usage.CostUSD(providerName, model, prompt, completion)
+}
+
 // recordSpend adds the cost of a finished request to the tenant's monthly total.
 // ctx is only used for the tenant and the request id, we do not stop when the client has left.
 func (h *Handler) recordSpend(ctx context.Context, providerName, model string, u *provider.Usage, promptEstimate int64, answerChars int) {
@@ -66,8 +72,7 @@ func (h *Handler) recordSpend(ctx context.Context, providerName, model string, u
 	if h.Budget == nil || tenant == nil {
 		return
 	}
-	prompt, completion := costTokens(u, promptEstimate, answerChars)
-	cost := usage.CostUSD(providerName, model, prompt, completion)
+	_, _, cost := chargeOf(providerName, model, u, promptEstimate, answerChars)
 
 	addCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()

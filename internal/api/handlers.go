@@ -30,6 +30,7 @@ type Handler struct {
 	Cache      cache.Cache    // nil = no caching
 	Semantic   cache.Semantic // nil = no semantic cache (needs Embedder too)
 	Embedder   embed.Embedder // turns a prompt into a vector
+	Usage      UsageRecorder  // nil = usage events are not recorded
 
 	CacheAllowTemperature bool // also cache requests with temperature above 0 (or none)
 

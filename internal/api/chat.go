@@ -168,6 +168,8 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	setRouteHeader(w, be, sv)
 	if err != nil {
 		res.refund() // nothing was used, give the reserved tokens back
+		h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model,
+			cacheStatus: h.plainCacheStatus(), status: endStatus(r.Context())})
 		// The full error goes to the log. The client gets a short, safe message.
 		slog.Warn("provider call failed",
 			"request_id", RequestIDFrom(r.Context()),
@@ -188,6 +190,8 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	res.settle(&resp.Usage, answerChars)
 	h.recordSpend(r.Context(), sv.Provider, sv.Model, &resp.Usage, estimatePromptTokens(&req), answerChars)
+	h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model, cacheStatus: h.plainCacheStatus(),
+		status: "ok", charged: true, u: &resp.Usage, promptEstimate: estimatePromptTokens(&req), answerChars: answerChars})
 	w.Header().Set("X-Provider", sv.Provider)
 	writeJSON(w, http.StatusOK, resp)
 }

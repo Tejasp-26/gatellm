@@ -51,6 +51,7 @@ func (h *Handler) chatCached(w http.ResponseWriter, r *http.Request, be backend,
 	// 1. Look in the cache. A Redis error is not a reason to fail the request: treat it as a miss.
 	if entry, hit := h.cacheGet(r.Context(), key); hit {
 		res.refund() // nothing was used, give the reserved tokens back (the request still counts for rpm)
+		h.recordUsage(r.Context(), usageInfo{provider: entry.Provider, model: entry.Model, cacheStatus: "HIT-EXACT", status: "ok"})
 		h.writeCached(w, be, entry.Response, router.Served{Provider: entry.Provider, Model: entry.Model}, "HIT-EXACT", false)
 		return
 	}
@@ -82,6 +83,7 @@ func (h *Handler) chatCached(w http.ResponseWriter, r *http.Request, be backend,
 		resp, sv, err := be.chat(ctx, req)
 		if err != nil {
 			res.refund() // nothing was used
+			h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model, cacheStatus: "MISS", status: "error"})
 			return nil, &flightError{sv: sv, err: err}
 		}
 
@@ -92,6 +94,8 @@ func (h *Handler) chatCached(w http.ResponseWriter, r *http.Request, be backend,
 		}
 		res.settle(&resp.Usage, answerChars)
 		h.recordSpend(r.Context(), sv.Provider, sv.Model, &resp.Usage, estimatePromptTokens(req), answerChars)
+		h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model, cacheStatus: "MISS",
+			status: "ok", charged: true, u: &resp.Usage, promptEstimate: estimatePromptTokens(req), answerChars: answerChars})
 
 		// Store the answer for next time (only real answers).
 		if len(resp.Choices) > 0 {
@@ -104,13 +108,14 @@ func (h *Handler) chatCached(w http.ResponseWriter, r *http.Request, be backend,
 
 	// 3. Write the answer.
 	if err != nil {
-		if !leader {
-			res.refund() // a follower used nothing (the leader refunded its own)
-		}
 		var fe *flightError
 		sv := router.Served{}
 		if errors.As(err, &fe) {
 			sv = fe.sv
+		}
+		if !leader {
+			res.refund() // a follower used nothing (the leader refunded its own)
+			h.recordUsage(r.Context(), usageInfo{provider: sv.Provider, model: sv.Model, cacheStatus: "COALESCED", status: "error"})
 		}
 		setRouteHeader(w, be, sv)
 		w.Header().Set("X-Cache", "MISS")
@@ -125,12 +130,18 @@ func (h *Handler) chatCached(w http.ResponseWriter, r *http.Request, be backend,
 	}
 
 	out := v.(*flightResult)
-	if !leader || out.hit != "" {
-		res.refund() // the tokens we reserved were not used by us
-	}
 	status := "MISS"
 	if out.hit != "" {
 		status = out.hit
+	}
+	if !leader || out.hit != "" {
+		res.refund() // the tokens we reserved were not used by us
+		// This request paid nothing: it got an answer from the cache or from the leader's call.
+		recorded := status
+		if out.hit == "" {
+			recorded = "COALESCED"
+		}
+		h.recordUsage(r.Context(), usageInfo{provider: out.sv.Provider, model: out.sv.Model, cacheStatus: recorded, status: "ok"})
 	}
 	if out.hit == "HIT-SEMANTIC" {
 		w.Header().Set("X-Cache-Similarity", strconv.FormatFloat(out.similarity, 'f', 4, 64))

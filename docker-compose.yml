@@ -17,6 +17,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    # appendonly = Redis writes every change to disk, so usage events that wait in the
+    # stream survive a restart of Redis.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
     ports:
       - "6379:6379"
     healthcheck:
@@ -27,6 +32,9 @@ services:
 
   app:
     build: .
+    # On "docker compose stop" the app gets SIGTERM and needs time to finish requests (15s)
+    # and to write the last usage events (10s). The Docker default of 10s would kill it too early.
+    stop_grace_period: 40s
     ports:
       - "8080:8080"
     environment:
@@ -43,4 +51,5 @@ services:
         condition: service_healthy
 
 volumes:
+  redisdata:
   pgdata:

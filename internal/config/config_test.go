@@ -53,3 +53,26 @@ func TestSemanticCacheSettingsAreChecked(t *testing.T) {
 		})
 	}
 }
+
+func TestUsagePipelineDefaultsAndChecks(t *testing.T) {
+	baseEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UsageEnabled || !cfg.UsageBlocking || cfg.UsageBatch != 50 || cfg.UsagePollMS != 5000 ||
+		cfg.UsageDrainSec != 10 || cfg.UsageStreamMaxLen != 100000 || cfg.UsageClaimIdleSec != 30 {
+		t.Errorf("unexpected defaults: %+v", cfg)
+	}
+	for _, bad := range []map[string]string{
+		{"USAGE_BATCH_SIZE": "0"}, {"USAGE_DRAIN_SECONDS": "-1"}, {"USAGE_POLL_MS": "soon"}, {"USAGE_BLOCKING_READ": "maybe"},
+	} {
+		baseEnv(t)
+		for k, v := range bad {
+			t.Setenv(k, v)
+		}
+		if _, err := Load(); err == nil {
+			t.Errorf("%v should be refused", bad)
+		}
+	}
+}

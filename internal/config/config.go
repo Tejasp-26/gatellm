@@ -56,6 +56,16 @@ type Config struct {
 	EmbeddingProvider string  // "mock" (no key needed) or "gemini"
 	EmbeddingModel    string  // for gemini, e.g. gemini-embedding-001
 	EmbeddingTimeout  int     // max time for one embedding call, in milliseconds
+
+	// Usage pipeline (Phase 7): events go through a Redis Stream into Postgres.
+	UsageEnabled        bool
+	UsageBatch          int  // events read and written at once
+	UsagePollMS         int  // how long one read waits for new events (see UsageBlocking)
+	UsageBlocking       bool // true = Redis holds the read open, false = we sleep UsagePollMS between reads
+	UsageClaimIdleSec   int  // unconfirmed messages older than this are taken over from dead consumers
+	UsageDrainSec       int  // at shutdown, the most time we spend writing the events that are left
+	UsageStreamMaxLen   int  // the stream keeps about this many events at most
+	UsagePublishTimeout int  // max time to put one event in the stream, in milliseconds
 }
 
 // Load reads env variables and checks that the required ones exist.
@@ -223,6 +233,34 @@ func Load() (*Config, error) {
 		default:
 			return nil, fmt.Errorf("EMBEDDING_PROVIDER must be \"mock\" or \"gemini\", got %q", cfg.EmbeddingProvider)
 		}
+	}
+
+	if cfg.UsageEnabled, err = getBool("USAGE_PIPELINE_ENABLED", true); err != nil {
+		return nil, err
+	}
+	if cfg.UsageBlocking, err = getBool("USAGE_BLOCKING_READ", true); err != nil {
+		return nil, err
+	}
+	for _, s := range []struct {
+		name     string
+		fallback int64
+		dest     *int
+	}{
+		{"USAGE_BATCH_SIZE", 50, &cfg.UsageBatch},
+		{"USAGE_POLL_MS", 5000, &cfg.UsagePollMS},
+		{"USAGE_CLAIM_IDLE_SECONDS", 30, &cfg.UsageClaimIdleSec},
+		{"USAGE_DRAIN_SECONDS", 10, &cfg.UsageDrainSec},
+		{"USAGE_STREAM_MAXLEN", 100000, &cfg.UsageStreamMaxLen},
+		{"USAGE_PUBLISH_TIMEOUT_MS", 500, &cfg.UsagePublishTimeout},
+	} {
+		n, err := getInt64(s.name, s.fallback)
+		if err != nil {
+			return nil, err
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("%s must be bigger than 0", s.name)
+		}
+		*s.dest = int(n)
 	}
 	return cfg, nil
 }
